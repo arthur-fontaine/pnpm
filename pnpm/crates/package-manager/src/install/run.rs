@@ -179,6 +179,25 @@ where
         // paths threaded into log events.
         let prefix = workspace_root.to_string_lossy().into_owned();
 
+        // Before anything reads `node_modules`: a sibling worktree of this
+        // repository may already hold the tree this install would write.
+        if config.seed_modules_from_worktree
+            && let Some(seeded) =
+                crate::seed_modules_from_worktree(&workspace_root, &config.modules_dir)
+        {
+            Reporter::emit(&LogEvent::Pnpm(PnpmLog {
+                level: LogLevel::Info,
+                message: format!(
+                    "Cloned node_modules from {} in {:.1}s (clone {:.1}s){}",
+                    seeded.donor.display(),
+                    seeded.elapsed.as_secs_f64(),
+                    seeded.clone_elapsed.as_secs_f64(),
+                    if seeded.lockfile_matches { "" } else { " (its lockfile differs)" },
+                ),
+                prefix: prefix.clone(),
+            }));
+        }
+
         // Walk every workspace project's `package.json` once. The
         // resulting `Vec` feeds both the up-to-date short-circuit
         // below and the fresh-install path's `workspace:`-spec lookup
@@ -308,17 +327,27 @@ where
             && !frozen_lockfile
             && !config.force
             && !disable_optimistic_repeat_install
-            && check_optimistic_repeat_install(&OptimisticRepeatInstallCheck {
-                workspace_root: &workspace_root,
-                config,
-                node_linker,
-                included,
-                supported_architectures: supported_architectures.as_ref(),
-                project_manifests: &project_manifests,
-                is_workspace_install: workspace_manifest.is_some(),
-                lockfile,
-                catalogs: &catalogs,
-            }) == OptimisticRepeatInstallDecision::UpToDate;
+            && {
+                let decision = check_optimistic_repeat_install(&OptimisticRepeatInstallCheck {
+                    workspace_root: &workspace_root,
+                    config,
+                    node_linker,
+                    included,
+                    supported_architectures: supported_architectures.as_ref(),
+                    project_manifests: &project_manifests,
+                    is_workspace_install: workspace_manifest.is_some(),
+                    lockfile,
+                    catalogs: &catalogs,
+                });
+                if let OptimisticRepeatInstallDecision::Skipped { reason } = &decision {
+                    tracing::debug!(
+                        target: "pacquet::install",
+                        reason,
+                        "repeat-install fast path skipped",
+                    );
+                }
+                decision == OptimisticRepeatInstallDecision::UpToDate
+            };
         if optimistic_decision {
             // Keep `strictDepBuilds` enforced across reruns: an install
             // that already recorded unapproved ignored builds must keep

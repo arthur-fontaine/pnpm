@@ -98,6 +98,7 @@ mod runtime;
 mod sbom;
 mod scope_report;
 mod search;
+mod seed_modules_from_worktree;
 mod self_update;
 mod set_script;
 mod side_effects_cache;

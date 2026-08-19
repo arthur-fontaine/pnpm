@@ -79,6 +79,7 @@ ssri            = { workspace = true }
 tempfile        = { workspace = true }
 tokio           = { workspace = true }
 tracing         = { workspace = true }
+libc        = { workspace = true }
 miette          = { workspace = true }
 
 [dev-dependencies]
