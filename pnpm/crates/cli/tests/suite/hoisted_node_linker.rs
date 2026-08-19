@@ -611,11 +611,17 @@ fn a_nested_copy_is_removed_once_its_version_wins_the_root_slot() {
     );
 
     // The same must hold for a link left behind by an install that did
-    // materialize the root-slot winner inside the project.
+    // materialize the root-slot winner inside the project. Dropping the
+    // workspace state gets the install past the repeat-install
+    // short-circuit, which — like pnpm's — reports an unchanged
+    // workspace up to date without looking inside a project's
+    // `node_modules`.
     let stale = loser.join("node_modules").join(SCRIPTS);
     fs::create_dir_all(stale.parent().expect("scope dir")).expect("create the scope dir");
     std::os::unix::fs::symlink(fixture.workspace.join("node_modules").join(SCRIPTS), &stale)
         .expect("plant a stale link");
+    fs::remove_file(fixture.workspace.join("node_modules/.pnpm-workspace-state-v1.json"))
+        .expect("remove the workspace state");
     fixture.run(["install"]);
 
     assert!(!stale.exists(), "a stale project-local link must not survive a reinstall");

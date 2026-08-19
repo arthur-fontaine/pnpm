@@ -241,7 +241,7 @@ pub(crate) fn check_optimistic_repeat_install_ignoring(
     // overrides yet, so check the install-time `config.modules_dir`
     // for the root + `<project_root>/node_modules` for siblings,
     // matching the `isolated`-linker default.
-    if !modules_dirs_present(config, project_manifests) {
+    if !modules_dirs_present(config, node_linker, project_manifests) {
         return Decision::Skipped {
             reason: "project has dependencies but no node_modules directory",
         };
@@ -488,9 +488,10 @@ fn project_structure_matches(
 
 fn modules_dirs_present(
     config: &Config,
+    node_linker: NodeLinker,
     project_manifests: &[(PathBuf, &PackageManifest)],
 ) -> bool {
-    first_project_missing_modules_dir(config, project_manifests).is_none()
+    first_project_missing_modules_dir(config, node_linker, project_manifests).is_none()
 }
 
 /// The id (`name` field, falling back to the root dir) of the first
@@ -498,8 +499,15 @@ fn modules_dirs_present(
 /// `None` when every project with dependencies has one.
 fn first_project_missing_modules_dir(
     config: &Config,
+    node_linker: NodeLinker,
     project_manifests: &[(PathBuf, &PackageManifest)],
 ) -> Option<String> {
+    // The hoisted linker installs every project's dependencies into the
+    // root modules directory, so that one directory is what each project
+    // is checked against — a member's own `node_modules` holds nothing
+    // but workspace links and is usually absent (pnpm/pnpm#14001). pnpm
+    // does the same in `checkDepsStatus`'s `statModulesDir`.
+    let hoisted = matches!(node_linker, NodeLinker::Hoisted);
     project_manifests.iter().find_map(|(root_dir, manifest)| {
         if !manifest_has_runtime_deps(manifest) {
             return None;
@@ -508,7 +516,7 @@ fn first_project_missing_modules_dir(
         // their own `<root>/node_modules`. Matches the isolated-linker
         // default — `config.modules_dir` is `<workspace_root>/node_modules`
         // unless the user overrode it explicitly.
-        let modules_dir = if *root_dir == workspace_dir_of(config, root_dir) {
+        let modules_dir = if hoisted || *root_dir == workspace_dir_of(config, root_dir) {
             config.modules_dir.clone()
         } else {
             root_dir.join("node_modules")
