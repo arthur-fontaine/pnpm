@@ -6,7 +6,9 @@
 
 use indexmap::IndexMap;
 use pipe_trait::Pipe;
-use pnpm_modules_yaml::{HoistKind, Host, Modules, read_modules_manifest, write_modules_manifest};
+use pnpm_modules_yaml::{
+    HoistKind, Host, Modules, read_modules_layout, read_modules_manifest, write_modules_manifest,
+};
 use pretty_assertions::assert_eq;
 use serde_json::{Value, json};
 use std::{fs, path::Path};
@@ -193,4 +195,45 @@ fn read_empty_modules_manifest_returns_none() {
         .pipe_as_ref(read_modules_manifest::<Host>)
         .expect("read manifest");
     assert_eq!(modules_yaml, None);
+}
+
+/// A peer-suffixed dep path can exceed a thousand characters — an Expo
+/// tree reaches 1036 — and YAML caps a plain key at 1024. The manifest
+/// is written as JSON, so such a key round-trips through the writer;
+/// reading it back must not depend on it also being a legal YAML key.
+#[test]
+fn read_modules_manifest_accepts_a_key_longer_than_a_yaml_plain_key() {
+    let temp_dir = tempfile::tempdir().expect("create temporary directory");
+    let modules_dir = temp_dir.path();
+    let mut long_key = "@scope/pkg@1.0.0".to_string();
+    long_key.push_str(&"(peer@1.0.0".repeat(100));
+    long_key.push_str(&")".repeat(100));
+    assert!(long_key.len() > 1024, "the fixture key must exceed the YAML limit");
+    let modules_yaml = manifest_from_json(json!({
+        "hoistedDependencies": {},
+        "hoistedLocations": { &long_key: ["node_modules/@scope/pkg"] },
+        "included": {
+            "dependencies": true,
+            "devDependencies": true,
+            "optionalDependencies": true,
+        },
+        "layoutVersion": 5,
+        "packageManager": "pnpm@2",
+        "pendingBuilds": [],
+        "publicHoistPattern": [],
+        "prunedAt": "Thu, 01 Jan 1970 00:00:00 GMT",
+        "skipped": [],
+        "storeDir": "/.pnpm-store",
+        "virtualStoreDir": modules_dir.join(".pnpm"),
+        "virtualStoreDirMaxLength": 120,
+    }));
+
+    write_modules_manifest::<Host>(modules_dir, modules_yaml.clone()).expect("write manifest");
+
+    let actual = read_modules_manifest::<Host>(modules_dir).expect("read manifest");
+    assert_eq!(actual, Some(modules_yaml));
+    let layout = read_modules_layout::<Host>(modules_dir)
+        .expect("read layout")
+        .expect("modules manifest exists");
+    assert_eq!(layout.package_manager, "pnpm@2");
 }

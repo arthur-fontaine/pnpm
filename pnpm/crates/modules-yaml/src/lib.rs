@@ -10,7 +10,7 @@ use indexmap::{IndexMap, IndexSet};
 use pipe_trait::Pipe;
 use pnpm_diagnostics::miette::{self, Diagnostic};
 use pnpm_fs::lexical_normalize;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::{
     collections::BTreeMap,
     fs, io, iter,
@@ -403,10 +403,7 @@ where
             return Err(ReadModulesError::ReadFile { path: manifest_path, source });
         }
     };
-    let parsed: Option<Modules> =
-        content.pipe_as_ref(serde_saphyr::from_str).map_err(|source| {
-            ReadModulesError::ParseYaml { path: manifest_path.clone(), source: Box::new(source) }
-        })?;
+    let parsed: Option<Modules> = parse_modules_document(&content, &manifest_path)?;
     let Some(mut manifest) = parsed else { return Ok(None) };
     apply_legacy_shamefully_hoist(&mut manifest);
     resolve_virtual_store_dir(&mut manifest, modules_dir);
@@ -417,6 +414,30 @@ where
         manifest.virtual_store_dir_max_length = DEFAULT_VIRTUAL_STORE_DIR_MAX_LENGTH;
     }
     Ok(Some(manifest))
+}
+
+/// Deserialize the manifest text, `None` for an empty document.
+///
+/// Both pnpm implementations write `.modules.yaml` as JSON, so JSON is
+/// tried first: a dep path carrying peer suffixes can pass YAML's
+/// 1024-character limit on a plain key — an Expo tree reaches 1036 —
+/// and the YAML parser then rejects a manifest pnpm itself wrote. A
+/// manifest the JSON parser rejects is a hand-written or legacy YAML
+/// one, and keeps the YAML parser's error.
+fn parse_modules_document<T>(
+    content: &str,
+    manifest_path: &Path,
+) -> Result<Option<T>, ReadModulesError>
+where
+    T: DeserializeOwned,
+{
+    if let Ok(parsed) = serde_json::from_str::<Option<T>>(content) {
+        return Ok(parsed);
+    }
+    content.pipe(serde_saphyr::from_str).map_err(|source| ReadModulesError::ParseYaml {
+        path: manifest_path.to_path_buf(),
+        source: Box::new(source),
+    })
 }
 
 /// Reads the manifest into the lightweight [`ModulesLayout`] struct, skipping
@@ -435,10 +456,7 @@ where
             return Err(ReadModulesError::ReadFile { path: manifest_path, source });
         }
     };
-    let parsed: Option<ModulesLayout> =
-        content.pipe_as_ref(serde_saphyr::from_str).map_err(|source| {
-            ReadModulesError::ParseYaml { path: manifest_path.clone(), source: Box::new(source) }
-        })?;
+    let parsed: Option<ModulesLayout> = parse_modules_document(&content, &manifest_path)?;
     let Some(mut manifest) = parsed else { return Ok(None) };
 
     // Normalize legacy shamefully_hoist to public_hoist_pattern.

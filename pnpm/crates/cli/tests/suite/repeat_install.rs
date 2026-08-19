@@ -455,3 +455,42 @@ fn repeat_hoisted_install_reports_nothing_broken() {
 
     drop((root, mock_instance));
 }
+
+/// A dep path carrying peer suffixes can pass YAML's 1024-character
+/// limit on a plain key, and `.modules.yaml` is written as JSON, so such
+/// a key reaches the file. Reading it back must still work: it feeds the
+/// repeat-install short-circuit, which otherwise re-links the whole tree
+/// on every install.
+#[test]
+fn repeat_install_short_circuits_with_an_over_long_modules_yaml_key() {
+    let CommandTempCwd { pacquet, root, workspace, npmrc_info, .. } =
+        CommandTempCwd::init().add_mocked_registry();
+    let AddMockedRegistry { mock_instance, .. } = npmrc_info;
+
+    let hoisted_manifest = install_hoisted_workspace_member(pacquet, &workspace);
+    let modules_yaml = workspace.join("node_modules/.modules.yaml");
+    let mut manifest: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&modules_yaml).expect("read .modules.yaml"))
+            .expect("parse .modules.yaml");
+    let mut long_key = "@scope/pkg@1.0.0".to_string();
+    long_key.push_str(&"(peer@1.0.0".repeat(100));
+    long_key.push_str(&")".repeat(100));
+    assert!(long_key.len() > 1024, "the fixture key must exceed the YAML limit");
+    manifest["hoistedLocations"][long_key] = serde_json::json!(["node_modules/@scope/pkg"]);
+    fs::write(&modules_yaml, manifest.to_string()).expect("write .modules.yaml");
+    let inode_before = fs::metadata(&hoisted_manifest).expect("stat the hoisted dep").ino();
+
+    let second = pacquet_in(&workspace).with_arg("install").assert().success();
+    let second_output = String::from_utf8_lossy(&second.get_output().stdout).into_owned();
+    assert!(
+        second_output.contains("Already up to date"),
+        "the repeat install must short-circuit: {second_output}",
+    );
+    assert_eq!(
+        fs::metadata(&hoisted_manifest).expect("stat the hoisted dep").ino(),
+        inode_before,
+        "the second install must re-import nothing",
+    );
+
+    drop((root, mock_instance));
+}
