@@ -187,11 +187,10 @@ where
             Reporter::emit(&LogEvent::Pnpm(PnpmLog {
                 level: LogLevel::Info,
                 message: format!(
-                    "Cloned node_modules from {} in {:.1}s (clone {:.1}s){}",
+                    "Cloned node_modules from {} in {:.1}s (clone {:.1}s)",
                     seeded.donor.display(),
                     seeded.elapsed.as_secs_f64(),
                     seeded.clone_elapsed.as_secs_f64(),
-                    if seeded.lockfile_matches { "" } else { " (its lockfile differs)" },
                 ),
                 prefix: prefix.clone(),
             }));

@@ -21,9 +21,6 @@ use std::{
 /// What [`seed_modules_from_worktree`] cloned.
 pub struct SeededModules {
     pub donor: PathBuf,
-    /// Whether the donor's `pnpm-lock.yaml` is byte-identical to ours.
-    /// When it is, the install that follows has nothing to reconcile.
-    pub lockfile_matches: bool,
     pub elapsed: std::time::Duration,
     pub clone_elapsed: std::time::Duration,
 }
@@ -57,14 +54,12 @@ pub fn seed_modules_from_worktree(
     Some(SeededModules {
         clone_elapsed,
         donor: donor.path,
-        lockfile_matches: donor.lockfile_matches,
         elapsed: started.elapsed(),
     })
 }
 
 struct Donor {
     path: PathBuf,
-    lockfile_matches: bool,
     /// Whether every file the freshness check reads — the workspace
     /// manifest, each project's `package.json`, each patch — is
     /// byte-identical to the donor's.
@@ -72,39 +67,66 @@ struct Donor {
     installed_at: std::time::SystemTime,
 }
 
-/// The sibling worktree whose tree is the cheapest to reconcile: one
-/// whose lockfile matches ours needs no work at all, and among equals the
-/// most recently installed one is the closest to any lockfile we might
-/// have.
+/// The worktree whose tree this install can adopt wholesale, and among
+/// several the most recently installed one. Every candidate that is
+/// turned down logs why at debug level.
 fn pick_donor(workspace_root: &Path, modules_dir: &Path) -> Option<Donor> {
-    let our_lockfile = fs::read(workspace_root.join("pnpm-lock.yaml")).ok();
+    let Ok(our_lockfile) = fs::read(workspace_root.join("pnpm-lock.yaml")) else {
+        tracing::debug!(
+            target: "pacquet::install",
+            "no pnpm-lock.yaml here, so no worktree can be adopted",
+        );
+        return None;
+    };
     let mut donors: Vec<Donor> = repository_worktrees(workspace_root)
         .into_iter()
         .filter(|path| path != workspace_root)
         .filter_map(|path| {
+            let rejected = |reason: &'static str| -> Option<Donor> {
+                tracing::debug!(
+                    target: "pacquet::install",
+                    candidate = %path.display(),
+                    reason,
+                    "worktree cannot seed this node_modules",
+                );
+                None
+            };
             // `.modules.yaml` is what makes the tree readable as a previous
             // install; a bare `node_modules` would leave the install
             // guessing what is in it.
             let state = path.join("node_modules/.modules.yaml");
-            let installed_at = fs::metadata(&state).ok()?.modified().ok()?;
+            let Some(installed_at) =
+                fs::metadata(&state).ok().and_then(|state| state.modified().ok())
+            else {
+                return rejected("no node_modules/.modules.yaml");
+            };
             // Never clone a directory into itself or into one of its own
             // parents: `modules_dir` may be a symlink into the donor.
             if modules_dir.starts_with(&path) {
-                return None;
+                return rejected("our node_modules lives inside it");
+            }
+            if fs::read(path.join("pnpm-lock.yaml")).ok().as_deref() != Some(&our_lockfile) {
+                return rejected("its pnpm-lock.yaml differs from ours");
             }
             // The donor's *wanted* lockfile matching ours is not enough:
             // its tree may lag its own lockfile, and then the install
             // would clone a stale tree only to rebuild all of it, which
             // costs more than installing from the store. What has to
             // match is the tree the donor actually materialized.
-            let lockfile_matches = our_lockfile.is_some()
-                && fs::read(path.join("pnpm-lock.yaml")).ok().as_ref() == our_lockfile.as_ref()
-                && donor_tree_is_current(&path);
-            let inputs_match = lockfile_matches && install_inputs_match(&path, workspace_root);
-            Some(Donor { path, lockfile_matches, inputs_match, installed_at })
+            if !donor_tree_is_current(&path) {
+                return rejected("its tree does not hold what its lockfile asks for");
+            }
+            let inputs_match = install_inputs_match(&path, workspace_root);
+            if !inputs_match {
+                tracing::debug!(
+                    target: "pacquet::install",
+                    candidate = %path.display(),
+                    "seeding from a worktree whose manifests differ, so the install revalidates",
+                );
+            }
+            Some(Donor { path, inputs_match, installed_at })
         })
         .collect();
-    donors.retain(|donor| donor.lockfile_matches);
     donors.sort_by_key(|donor| std::cmp::Reverse(donor.installed_at));
     donors.into_iter().next()
 }
