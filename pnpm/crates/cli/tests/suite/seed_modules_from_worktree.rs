@@ -1,6 +1,5 @@
-//! `seedModulesFromWorktree`: a worktree with no `node_modules` clones one
-//! from a sibling worktree of the same repository instead of writing the
-//! whole tree from the store.
+//! A worktree with no `node_modules` clones one from another worktree of
+//! the same repository instead of writing the whole tree from the store.
 
 #![cfg(unix)]
 
@@ -31,11 +30,7 @@ fn git(dir: &Path, args: &[&str]) {
 
 /// A committed workspace with one dependency installed, plus the path a
 /// sibling worktree should be created at.
-fn committed_workspace(workspace: &Path, extra_yaml: &str) {
-    let workspace_yaml = workspace.join("pnpm-workspace.yaml");
-    let mut yaml = fs::read_to_string(&workspace_yaml).expect("read pnpm-workspace.yaml");
-    yaml.push_str(extra_yaml);
-    fs::write(&workspace_yaml, yaml).expect("write pnpm-workspace.yaml");
+fn committed_workspace(workspace: &Path) {
     fs::write(
         workspace.join("package.json"),
         serde_json::json!({
@@ -65,7 +60,7 @@ fn a_sibling_worktree_clones_the_tree_instead_of_writing_it() {
     let CommandTempCwd { pacquet, root, workspace, npmrc_info, .. } =
         CommandTempCwd::init().add_mocked_registry();
     let AddMockedRegistry { mock_instance, .. } = npmrc_info;
-    committed_workspace(&workspace, "seedModulesFromWorktree: true\n");
+    committed_workspace(&workspace);
 
     pacquet.with_arg("install").assert().success();
     // The lockfile the sibling inherits has to be the installed one.
@@ -104,25 +99,27 @@ fn a_sibling_worktree_clones_the_tree_instead_of_writing_it() {
 
 #[cfg(target_os = "macos")]
 #[test]
-fn a_sibling_worktree_is_not_cloned_unless_the_setting_asks_for_it() {
+fn a_worktree_without_the_donor_s_lockfile_is_not_cloned() {
     let CommandTempCwd { pacquet, root, workspace, npmrc_info, .. } =
         CommandTempCwd::init().add_mocked_registry();
     let AddMockedRegistry { mock_instance, .. } = npmrc_info;
-    committed_workspace(&workspace, "");
+    committed_workspace(&workspace);
 
     pacquet.with_arg("install").assert().success();
     git(&workspace, &["add", "-A"]);
     git(&workspace, &["commit", "-qm", "lockfile"]);
+    // `HEAD~1` predates the lockfile, so this worktree asks for an
+    // install the donor's tree does not hold.
     let sibling = root.path().join("sibling");
-    git(&workspace, &["worktree", "add", "-q", sibling.to_str().expect("utf-8"), "HEAD"]);
+    git(&workspace, &["worktree", "add", "-q", sibling.to_str().expect("utf-8"), "HEAD~1"]);
 
     let install = pacquet_in(&sibling).with_arg("install").assert().success();
     let output = String::from_utf8_lossy(&install.get_output().stdout).into_owned();
 
-    assert!(!output.contains("Cloned node_modules"), "the default install writes its own tree");
+    assert!(!output.contains("Cloned node_modules"), "a mismatched donor is skipped: {output}");
     assert!(
         sibling.join("node_modules/is-positive/package.json").is_file(),
-        "and it is still complete",
+        "and the install writes its own tree",
     );
 
     drop((root, mock_instance));

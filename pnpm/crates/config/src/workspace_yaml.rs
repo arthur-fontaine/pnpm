@@ -252,9 +252,6 @@ pub struct WorkspaceSettings {
     /// `Config` layer ([`Config::optimistic_repeat_install`]) to
     /// match pnpm.
     pub optimistic_repeat_install: Option<bool>,
-    /// `seedModulesFromWorktree` from `pnpm-workspace.yaml`. See
-    /// [`Config::seed_modules_from_worktree`].
-    pub seed_modules_from_worktree: Option<bool>,
     pub hoist_workspace_packages: Option<bool>,
     /// `extendNodePath` from `pnpm-workspace.yaml`. See
     /// [`Config::extend_node_path`].
@@ -1212,7 +1209,6 @@ impl WorkspaceSettings {
             auto_install_peers, auto_install_peers_from_highest_match,
             exclude_links_from_lockfile,
             optimistic_repeat_install,
-            seed_modules_from_worktree,
             init_package_manager,
             init_type,
             hoist_workspace_packages,

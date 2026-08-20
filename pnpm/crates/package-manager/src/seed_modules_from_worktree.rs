@@ -1,4 +1,4 @@
-//! Seed an empty `node_modules` from a sibling git worktree.
+//! Seed an empty `node_modules` from another git worktree.
 //!
 //! A fresh worktree of a repository starts without `node_modules`, so its
 //! first install writes the whole tree — on a large workspace, hundreds of
@@ -78,7 +78,7 @@ struct Donor {
 /// have.
 fn pick_donor(workspace_root: &Path, modules_dir: &Path) -> Option<Donor> {
     let our_lockfile = fs::read(workspace_root.join("pnpm-lock.yaml")).ok();
-    let mut donors: Vec<Donor> = sibling_worktrees(workspace_root)
+    let mut donors: Vec<Donor> = repository_worktrees(workspace_root)
         .into_iter()
         .filter(|path| path != workspace_root)
         .filter_map(|path| {
@@ -167,7 +167,7 @@ fn donor_tree_is_current(donor_root: &Path) -> bool {
 /// Every worktree of the repository `workspace_root` belongs to, as git
 /// reports them. An empty list when git is absent or this is not a
 /// repository, which turns the seeding off rather than failing an install.
-fn sibling_worktrees(workspace_root: &Path) -> Vec<PathBuf> {
+fn repository_worktrees(workspace_root: &Path) -> Vec<PathBuf> {
     let Ok(output) = Command::new("git")
         .args(["worktree", "list", "--porcelain"])
         .current_dir(workspace_root)

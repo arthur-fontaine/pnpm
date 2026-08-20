@@ -181,9 +181,8 @@ where
 
         // Before anything reads `node_modules`: a sibling worktree of this
         // repository may already hold the tree this install would write.
-        if config.seed_modules_from_worktree
-            && let Some(seeded) =
-                crate::seed_modules_from_worktree(&workspace_root, &config.modules_dir)
+        if let Some(seeded) =
+            crate::seed_modules_from_worktree(&workspace_root, &config.modules_dir)
         {
             Reporter::emit(&LogEvent::Pnpm(PnpmLog {
                 level: LogLevel::Info,

@@ -1097,13 +1097,6 @@ pub struct Config {
     #[default = true]
     pub optimistic_repeat_install: bool,
 
-    /// Seed an empty `node_modules` by cloning one from another git
-    /// worktree of the same repository, so the install only has to
-    /// reconcile the difference instead of writing the whole tree.
-    /// Needs a filesystem that clones a directory in one operation
-    /// (APFS today). Off by default.
-    pub seed_modules_from_worktree: bool,
-
     /// When `true`, runtime dependencies (`node@runtime:`,
     /// `deno@runtime:`, `bun@runtime:`) are skipped at install
     /// time — their archives aren't fetched, their slots aren't
