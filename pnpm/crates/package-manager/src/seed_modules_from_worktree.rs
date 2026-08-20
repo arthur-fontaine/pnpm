@@ -51,11 +51,7 @@ pub fn seed_modules_from_worktree(
     }
     let clone_elapsed = clone_started.elapsed();
     rewrite_workspace_state(modules_dir, &donor.path, workspace_root, donor.inputs_match);
-    Some(SeededModules {
-        clone_elapsed,
-        donor: donor.path,
-        elapsed: started.elapsed(),
-    })
+    Some(SeededModules { clone_elapsed, donor: donor.path, elapsed: started.elapsed() })
 }
 
 struct Donor {
