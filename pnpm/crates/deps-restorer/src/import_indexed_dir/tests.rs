@@ -300,11 +300,12 @@ fn fresh_target_creates_nested_directories() {
     assert_eq!(fs::read(target.join("lib/deep/nested/file.js")).unwrap(), b"deeper");
 }
 
-/// Upstream's `moveOrMergeModulesDirs` would merge; pacquet's slice-1
-/// consumer (the hoisted-linker) never produces this state, so erroring
-/// loudly is the right call until a real caller demands the merge.
+/// `@parcel/watcher-wasm` ships a `node_modules/` directory inside its
+/// tarball, so the staged import and the live directory can both have
+/// one; the two are merged the way upstream's `moveOrMergeModulesDirs`
+/// merges them.
 #[test]
-fn node_modules_collision_in_file_map_errors() {
+fn node_modules_in_file_map_merges_with_the_preserved_one() {
     let tmp = tempdir().unwrap();
     let src_root = tmp.path().join("cas");
     fs::create_dir_all(&src_root).unwrap();
@@ -316,20 +317,26 @@ fn node_modules_collision_in_file_map_errors() {
     fs::create_dir_all(target.join("node_modules/existing")).unwrap();
     fs::write(target.join("node_modules/existing/keep.js"), b"survivor").unwrap();
 
-    let err = import_indexed_dir::<SilentReporter>(
+    import_indexed_dir::<SilentReporter>(
         &AtomicU8::new(0),
         PackageImportMethod::Copy,
         &target,
         &cas,
         FORCE_KEEP,
     )
-    .expect_err("collision should surface");
-    assert!(matches!(err, ImportIndexedDirError::NodeModulesCollision { .. }), "got: {err:?}");
+    .expect("the two node_modules directories merge");
 
-    // After the error, the existing nested dep must still be on disk —
-    // the function's cleanup must not have rimrafed it as a side
-    // effect of the failed stage.
-    assert_eq!(fs::read(target.join("node_modules/existing/keep.js")).unwrap(), b"survivor");
+    assert_eq!(
+        fs::read(target.join("node_modules/existing/keep.js")).unwrap(),
+        b"survivor",
+        "what the linker installed survives",
+    );
+    assert_eq!(
+        fs::read(target.join("node_modules/foo/index.js")).unwrap(),
+        b"shipped-nm",
+        "what the tarball ships is imported",
+    );
+    assert_eq!(fs::read(target.join("package.json")).unwrap(), b"top");
 }
 
 /// On Unix, when `Hardlink` is available we want force re-imports to

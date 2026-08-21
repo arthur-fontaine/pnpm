@@ -75,10 +75,6 @@ pub enum ImportIndexedDirError {
         #[error(source)]
         error: io::Error,
     },
-    #[display(
-        "the indexed file map already contains a node_modules/ entry at {path:?}, which would conflict with the directory being preserved"
-    )]
-    NodeModulesCollision { path: PathBuf },
     #[display("failed to remove existing directory {path:?} prior to swap: {error}")]
     RemoveExisting {
         path: PathBuf,
@@ -633,20 +629,21 @@ fn stage_and_swap<Reporter: self::Reporter>(
     // 3. Preserve `node_modules/` if it's a real directory. Track the
     //    move so steps 4 and 5 can rescue it on failure.
     //
-    //    Indexed file maps for npm tarballs never contain
-    //    `node_modules/` entries (npm and pnpm strip them at pack
-    //    time), so a pre-existing `<stage>/node_modules/` would be
-    //    pathological; surface it as an error rather than silently
-    //    merging. Upstream's `moveOrMergeModulesDirs` performs a real
-    //    merge for this case, but the hoisted-linker call site does
-    //    not exercise it in practice.
+    //    A published tarball may itself ship a `node_modules/`
+    //    directory (`@parcel/watcher-wasm` does), so the staged import
+    //    can already hold one. Merge in that case, the way upstream's
+    //    `moveOrMergeModulesDirs` does: what the tarball ships wins a
+    //    name collision, and everything the linker installed alongside
+    //    it moves across.
     let nm_moved = match nm_kind {
         Some(file_type) if file_type.is_dir() => {
-            if stage_modules.exists() {
-                let _ = fs::remove_dir_all(&stage);
-                return Err(ImportIndexedDirError::NodeModulesCollision { path: stage_modules });
-            }
-            if let Err(error) = fs::rename(&target_modules, &stage_modules) {
+            let preserved = if stage_modules.exists() {
+                merge_modules_dirs(&target_modules, &stage_modules)
+                    .and_then(|()| fs::remove_dir_all(&target_modules))
+            } else {
+                fs::rename(&target_modules, &stage_modules)
+            };
+            if let Err(error) = preserved {
                 let _ = fs::remove_dir_all(&stage);
                 return Err(ImportIndexedDirError::PreserveModulesDir {
                     from: target_modules,
@@ -686,6 +683,24 @@ fn stage_and_swap<Reporter: self::Reporter>(
             leak_stage(&stage, &stage_modules);
         }
         return Err(ImportIndexedDirError::Swap { from: stage, to: dir_path.to_path_buf(), error });
+    }
+    Ok(())
+}
+
+/// Move every entry of `src` into `dest`, keeping what `dest` already
+/// has. Scope directories (`@scope/`) are merged one level deeper so a
+/// shipped `@scope/a` and an installed `@scope/b` both survive.
+fn merge_modules_dirs(src: &Path, dest: &Path) -> io::Result<()> {
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let dest_entry = dest.join(&name);
+        if name.to_string_lossy().starts_with('@') && entry.file_type()?.is_dir() {
+            fs::create_dir_all(&dest_entry)?;
+            merge_modules_dirs(&entry.path(), &dest_entry)?;
+        } else if fs::symlink_metadata(&dest_entry).is_err() {
+            fs::rename(entry.path(), &dest_entry)?;
+        }
     }
     Ok(())
 }
