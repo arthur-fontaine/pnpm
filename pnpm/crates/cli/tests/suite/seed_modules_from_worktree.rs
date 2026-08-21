@@ -124,3 +124,38 @@ fn a_worktree_without_the_donor_s_lockfile_is_not_cloned() {
 
     drop((root, mock_instance));
 }
+
+#[cfg(target_os = "macos")]
+#[test]
+fn a_worktree_whose_workspace_manifest_differs_is_not_cloned() {
+    let CommandTempCwd { pacquet, root, workspace, npmrc_info, .. } =
+        CommandTempCwd::init().add_mocked_registry();
+    let AddMockedRegistry { mock_instance, .. } = npmrc_info;
+    committed_workspace(&workspace);
+
+    pacquet.with_arg("install").assert().success();
+    git(&workspace, &["add", "-A"]);
+    git(&workspace, &["commit", "-qm", "lockfile"]);
+    let sibling = root.path().join("sibling");
+    git(&workspace, &["worktree", "add", "-q", sibling.to_str().expect("utf-8"), "HEAD"]);
+    // A setting that changes what the tree has to look like, with the
+    // lockfile the donor installed left untouched.
+    let workspace_yaml = sibling.join("pnpm-workspace.yaml");
+    let mut yaml = fs::read_to_string(&workspace_yaml).expect("read pnpm-workspace.yaml");
+    yaml.push_str("nodeLinker: hoisted\n");
+    fs::write(&workspace_yaml, yaml).expect("write pnpm-workspace.yaml");
+
+    let install = pacquet_in(&sibling).with_arg("install").assert().success();
+    let output = String::from_utf8_lossy(&install.get_output().stdout).into_owned();
+
+    assert!(
+        !output.contains("Cloned node_modules"),
+        "a donor that would be rebuilt is skipped: {output}",
+    );
+    assert!(
+        sibling.join("node_modules/is-positive/package.json").is_file(),
+        "and the install writes its own tree",
+    );
+
+    drop((root, mock_instance));
+}

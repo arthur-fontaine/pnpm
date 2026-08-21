@@ -50,16 +50,12 @@ pub fn seed_modules_from_worktree(
         return None;
     }
     let clone_elapsed = clone_started.elapsed();
-    rewrite_workspace_state(modules_dir, &donor.path, workspace_root, donor.inputs_match);
+    rewrite_workspace_state(modules_dir, &donor.path, workspace_root);
     Some(SeededModules { clone_elapsed, donor: donor.path, elapsed: started.elapsed() })
 }
 
 struct Donor {
     path: PathBuf,
-    /// Whether every file the freshness check reads — the workspace
-    /// manifest, each project's `package.json`, each patch — is
-    /// byte-identical to the donor's.
-    inputs_match: bool,
     installed_at: std::time::SystemTime,
 }
 
@@ -112,15 +108,10 @@ fn pick_donor(workspace_root: &Path, modules_dir: &Path) -> Option<Donor> {
             if !donor_tree_is_current(&path) {
                 return rejected("its tree does not hold what its lockfile asks for");
             }
-            let inputs_match = install_inputs_match(&path, workspace_root);
-            if !inputs_match {
-                tracing::debug!(
-                    target: "pacquet::install",
-                    candidate = %path.display(),
-                    "seeding from a worktree whose manifests differ, so the install revalidates",
-                );
+            if !install_inputs_match(&path, workspace_root) {
+                return rejected("its workspace or project manifests differ from ours");
             }
-            Some(Donor { path, inputs_match, installed_at })
+            Some(Donor { path, installed_at })
         })
         .collect();
     donors.sort_by_key(|donor| std::cmp::Reverse(donor.installed_at));
@@ -207,12 +198,7 @@ fn repository_worktrees(workspace_root: &Path) -> Vec<PathBuf> {
 /// the donor's absolute paths, which would otherwise read as a workspace
 /// whose projects all moved — the state is dropped when it cannot be
 /// rewritten, since a stale one only costs the install its fast path.
-fn rewrite_workspace_state(
-    modules_dir: &Path,
-    donor_root: &Path,
-    workspace_root: &Path,
-    inputs_match: bool,
-) {
+fn rewrite_workspace_state(modules_dir: &Path, donor_root: &Path, workspace_root: &Path) {
     let state_path = modules_dir.join(".pnpm-workspace-state-v1.json");
     let rewritten = fs::read_to_string(&state_path).ok().and_then(|text| {
         let mut state: serde_json::Value = serde_json::from_str(&text).ok()?;
@@ -221,8 +207,7 @@ fn rewrite_workspace_state(
         // every file a fresh mtime, so without carrying the validation
         // forward the freshness check reads unchanged manifests and
         // patches as edits and reinstalls the tree it was just handed.
-        if inputs_match
-            && let Some(timestamp) = state.get_mut("lastValidatedTimestamp")
+        if let Some(timestamp) = state.get_mut("lastValidatedTimestamp")
             && let Ok(now) = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
         {
             *timestamp = serde_json::json!(now.as_millis() as i64);
